@@ -7,7 +7,6 @@ einops==0.8.1
 einops_exts==0.0.4
 fastapi==0.116.0
 fire==0.7.0
-flash_attn==2.7.0.post2
 gdown==5.2.0
 gradio==5.35.0
 HyperPyYAML==1.2.2
@@ -50,3 +49,4 @@ wget==3.2
 whisper==1.1.10
 wids==0.1.11
 x_transformers==2.4.9
+flash_attn==2.7.0.post2
