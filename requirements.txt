@@ -10,7 +10,6 @@ fire==0.7.0
 gdown==5.2.0
 gradio==5.35.0
 HyperPyYAML==1.2.2
-inflect==7.3.1
 inflect==7.5.0
 k_diffusion==0.1.1.post1
 librosa==0.10.1
