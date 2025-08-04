@@ -16,6 +16,8 @@ librosa==0.10.1
 lightning==2.5.1
 matplotlib==3.10.3
 modelscope==1.27.1
+torch==2.4.0
+torchaudio==2.4.0
 natten==0.20.1
 numpy==2.3.1
 omegaconf==2.3.0
@@ -35,8 +37,6 @@ scipy==1.16.0
 setuptools==75.1.0
 soundfile==0.13.1
 tn==0.0.5
-torch==2.4.0+cu118
-torchaudio==2.4.0+cu118
 tqdm==4.66.5
 transformers==4.51.0
 ttsfrd==0.1.0
