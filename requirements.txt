@@ -16,8 +16,8 @@ librosa==0.10.1
 lightning==2.5.1
 matplotlib==3.10.3
 modelscope==1.27.1
-torch==2.4.0
-torchaudio==2.4.0
+torch==2.5.0
+torchaudio==2.5.0
 natten==0.20.1
 numpy==2.3.1
 omegaconf==2.3.0
