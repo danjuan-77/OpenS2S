@@ -30,7 +30,7 @@ from src.constants import (
     DEFAULT_AUDIO_START_TOKEN, DEFAULT_AUDIO_END_TOKEN, 
     DEFAULT_AUDIO_TOKEN, DEFAULT_TTS_START_TOKEN, AUDIO_TOKEN_INDEX
 )
-
+torchaudio.set_audio_backend("soundfile")
 class OpenS2SBatchInference:
     def __init__(self, model_path, flow_path, device="cuda"):
         self.device = device
