@@ -322,6 +322,12 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=512,
                        help="最大生成token数量")
     
+    # 数据范围参数
+    parser.add_argument("--start", type=int, default=0,
+                       help="开始处理的数据行号（从0开始）")
+    parser.add_argument("--end", type=int, default=-1,
+                       help="结束处理的数据行号（不包含该行，-1表示处理到文件末尾）")
+    
     args = parser.parse_args()
     
     # 检查输入
@@ -365,11 +371,33 @@ def main():
         with open(args.test_file, 'r', encoding='utf-8') as f:
             total_lines = sum(1 for _ in f)
         
-        print(f"\n开始批量推理，总共 {total_lines} 条数据...")
+        # 确定处理范围
+        start_idx = max(0, args.start)
+        end_idx = min(total_lines, args.end) if args.end > 0 else total_lines
+        
+        if start_idx >= end_idx:
+            print(f"错误：无效的数据范围 [{start_idx}, {end_idx})，总数据行数：{total_lines}")
+            return
+        
+        process_lines = end_idx - start_idx
+        print(f"\n开始批量推理，总共 {total_lines} 条数据，处理范围 [{start_idx}, {end_idx})，共 {process_lines} 条数据...")
         
         # 处理JSONL文件
         with open(args.test_file, 'r', encoding='utf-8') as f:
-            for line_num, line in enumerate(tqdm(f, total=total_lines, desc="处理进度"), 1):
+            for line_num, line in enumerate(f):
+                # 跳过不在处理范围内的数据
+                if line_num < start_idx:
+                    continue
+                if line_num >= end_idx:
+                    break
+                
+                # 使用相对行号显示进度
+                relative_line_num = line_num - start_idx + 1
+                if relative_line_num == 1:
+                    # 初始化进度条
+                    progress_bar = tqdm(total=process_lines, desc="处理进度")
+                
+                progress_bar.update(1)
                 try:
                     total_count += 1
                     data = json.loads(line.strip())
@@ -384,13 +412,13 @@ def main():
                     
                     # 检查输出文件是否已存在
                     if os.path.exists(output_path):
-                        print(f"跳过第{line_num}行: 输出文件已存在: {output_path}")
+                        print(f"跳过第{line_num}行(相对第{relative_line_num}行): 输出文件已存在: {output_path}")
                         skipped_count += 1
                         continue
                     
                     # 检查输入音频文件是否存在
                     if not os.path.exists(full_wav_path):
-                        print(f"跳过第{line_num}行: 输入音频文件不存在: {full_wav_path}")
+                        print(f"跳过第{line_num}行(相对第{relative_line_num}行): 输入音频文件不存在: {full_wav_path}")
                         failed_count += 1
                         continue
                     
@@ -406,7 +434,7 @@ def main():
                     )
                     
                     # 打印文本结果（不保存）
-                    print(f"第{line_num}行推理完成:")
+                    print(f"第{line_num}行(相对第{relative_line_num}行)推理完成:")
                     print(f"  输入: {full_wav_path}")
                     print(f"  文本响应: {results['text']}")
                     if results['audio_saved']:
@@ -418,20 +446,25 @@ def main():
                     processed_count += 1
                     
                 except json.JSONDecodeError as e:
-                    print(f"第{line_num}行JSON解析错误: {e}")
+                    print(f"第{line_num}行(相对第{relative_line_num}行)JSON解析错误: {e}")
                     failed_count += 1
                     continue
                 except KeyError as e:
-                    print(f"第{line_num}行缺少必要字段: {e}")
+                    print(f"第{line_num}行(相对第{relative_line_num}行)缺少必要字段: {e}")
                     failed_count += 1
                     continue
                 except Exception as e:
-                    print(f"第{line_num}行推理失败: {e}")
+                    print(f"第{line_num}行(相对第{relative_line_num}行)推理失败: {e}")
                     failed_count += 1
                     continue
         
+        # 关闭进度条
+        if 'progress_bar' in locals():
+            progress_bar.close()
+        
         # 输出统计信息
         print("\n=== 批量推理完成 ===")
+        print(f"数据范围: [{start_idx}, {end_idx})")
         print(f"总计: {total_count} 条数据")
         print(f"成功处理: {processed_count} 条")
         print(f"跳过（已存在）: {skipped_count} 条")
