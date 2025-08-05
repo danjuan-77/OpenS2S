@@ -3,9 +3,16 @@
 OpenS2S批量推理脚本
 基于inference.py，支持处理JSONL文件中的音频数据批量推理
 """
-
+import os
+# 设置环境变量，强制使用soundfile后端
+os.environ['TORCHAUDIO_BACKEND'] = 'soundfile'
 import torch
 import torchaudio
+try:
+    torchaudio.set_audio_backend("soundfile")
+    print("使用soundfile音频后端")
+except Exception as e:
+    print(f"警告：无法设置soundfile后端，将使用默认后端: {e}")
 import argparse
 import os
 import sys
@@ -30,7 +37,6 @@ from src.constants import (
     DEFAULT_AUDIO_START_TOKEN, DEFAULT_AUDIO_END_TOKEN, 
     DEFAULT_AUDIO_TOKEN, DEFAULT_TTS_START_TOKEN, AUDIO_TOKEN_INDEX
 )
-torchaudio.set_audio_backend("soundfile")
 class OpenS2SBatchInference:
     def __init__(self, model_path, flow_path, device="cuda"):
         self.device = device
