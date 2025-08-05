@@ -12,10 +12,12 @@ import sys
 import tempfile
 import base64
 import uuid
-from io import BytesIO
 from transformers import AutoTokenizer, GenerationConfig
-from threading import Thread
-import json
+from copy import deepcopy
+
+# 添加路径（与model_worker.py保持一致）
+sys.path.append("cosyvoice")
+sys.path.append("third_party/Matcha-TTS")
 
 # 导入OpenS2S相关模块
 from src.modeling_omnispeech import OmniSpeechModel
@@ -32,6 +34,7 @@ class OpenS2SInference:
         self.device = device
         self.model_path = model_path
         self.flow_path = flow_path
+        self.system_prompt = "You are a helpful assistant."
         
         print("正在加载模型...")
         self._load_models()
@@ -45,6 +48,12 @@ class OpenS2SInference:
             trust_remote_code=True
         )
         
+        # 加载TTS tokenizer
+        self.tts_tokenizer = AutoTokenizer.from_pretrained(
+            os.path.join(self.model_path, "tts"),
+            trust_remote_code=True
+        )
+        
         # 加载主模型
         self.model = OmniSpeechModel.from_pretrained(
             self.model_path, 
@@ -53,8 +62,10 @@ class OpenS2SInference:
         )
         self.model = self.model.to(self.device).eval()
         
-        # 加载音频特征提取器
-        self.audio_extractor = WhisperFeatureExtractor.from_pretrained(self.model_path)
+        # 加载音频特征提取器 - 关键修复：从audio子目录加载
+        self.audio_extractor = WhisperFeatureExtractor.from_pretrained(
+            os.path.join(self.model_path, "audio")
+        )
         
         # 加载音频解码器
         config_path = os.path.join(self.flow_path, "config.yaml")
@@ -66,43 +77,57 @@ class OpenS2SInference:
         )
         
         # 设置生成配置
-        self.generation_config = GenerationConfig(
-            max_new_tokens=256,
-            temperature=1.0,
-            top_p=1.0,
-            do_sample=True,
-            pad_token_id=self.tokenizer.eos_token_id
+        self.generation_config = GenerationConfig.from_pretrained(self.model_path)
+        self.tts_generation_config = GenerationConfig.from_pretrained(
+            os.path.join(self.model_path, "tts")
         )
+        
+        # 设置units bias（用于TTS token处理）
+        self.units_bias = self.tts_tokenizer.encode("<|audio_0|>")[0]
     
-    def _prepare_input(self, audio_path=None, text_prompt=""):
-        """准备模型输入"""
+    def get_input_params(self, messages):
+        """处理消息输入，与model_worker.py中的方法保持一致"""
+        new_messages = []
         audios = []
+        if self.system_prompt:
+            new_messages.append({"role": "system", "content": self.system_prompt})
         
-        # 处理音频输入
-        if audio_path and os.path.exists(audio_path):
-            waveform = get_waveform(audio_path)
-            audios.append(waveform)
-        
-        # 构建消息
-        if audios:
-            # 有音频输入
-            content = f"{text_prompt}{DEFAULT_AUDIO_START_TOKEN}{DEFAULT_AUDIO_TOKEN}{DEFAULT_AUDIO_END_TOKEN}"
-        else:
-            # 只有文本输入
-            content = text_prompt
-        
-        messages = [{"role": "user", "content": content}]
-        
-        # 应用聊天模板
-        prompt = self.tokenizer.apply_chat_template(
-            messages, 
-            add_generation_prompt=True, 
-            tokenize=False, 
-            enable_thinking=False
-        )
+        for turn in messages:
+            role = turn["role"]
+            content = turn["content"]
+            if isinstance(content, str):
+                new_content = content
+            elif isinstance(content, list):
+                new_content = ""
+                for item in content:
+                    if item.get("audio", ""):
+                        audio_binary = base64.b64decode(item["audio"])
+                        with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as temp_file:
+                            temp_file.write(audio_binary)
+                            temp_file_path = temp_file.name
+                            waveform = get_waveform(temp_file_path)
+                            audios.append(waveform)
+                        new_content += f"{DEFAULT_AUDIO_START_TOKEN}{DEFAULT_AUDIO_TOKEN}{DEFAULT_AUDIO_END_TOKEN}"
+                    elif item.get("text", ""):
+                        new_content += item["text"]
+            elif isinstance(content, dict):
+                new_content = ""
+                if content.get("audio", ""):
+                    audio_binary = base64.b64decode(content["audio"])
+                    with tempfile.NamedTemporaryFile(suffix='.wav', delete=True) as temp_file:
+                        temp_file.write(audio_binary)
+                        temp_file_path = temp_file.name
+                        waveform = get_waveform(temp_file_path)
+                        audios.append(waveform)
+                    new_content += f"{DEFAULT_AUDIO_START_TOKEN}{DEFAULT_AUDIO_TOKEN}{DEFAULT_AUDIO_END_TOKEN}"
+                elif content.get("text", ""):
+                    new_content += content["text"]
+            else:
+                raise NotImplementedError
+            new_messages.append({"role": f"{role}", "content": f"{new_content}"})
+
+        prompt = self.tokenizer.apply_chat_template(new_messages, add_generation_prompt=True, tokenize=False, enable_thinking=False)
         prompt += DEFAULT_TTS_START_TOKEN
-        
-        # 分词处理
         segments = prompt.split(f"{DEFAULT_AUDIO_TOKEN}")
         input_ids = []
         for idx, segment in enumerate(segments):
@@ -110,8 +135,7 @@ class OpenS2SInference:
                 input_ids += [AUDIO_TOKEN_INDEX]
             input_ids += self.tokenizer.encode(segment)
         input_ids = torch.LongTensor(input_ids).unsqueeze(0)
-        
-        # 处理音频特征
+
         if audios:
             speech_inputs = self.audio_extractor(
                 audios,
@@ -126,23 +150,29 @@ class OpenS2SInference:
         
         return input_ids, speech_values, speech_mask
     
-    def _extract_speech_units(self, output_ids, input_length):
-        """从输出中提取speech units（简化版本）"""
-        # 这是一个简化的实现，实际的speech units提取会更复杂
-        generated_ids = output_ids[0][input_length:]
+    def _prepare_input(self, audio_path=None, text_prompt=""):
+        """简化的输入准备方法，将音频文件和文本转换为消息格式"""
+        messages = []
         
-        # 查找TTS相关的token
-        speech_units = []
-        for token_id in generated_ids:
-            # 这里需要根据实际的token mapping来处理
-            # 这只是一个占位符实现
-            if token_id != self.tokenizer.eos_token_id:
-                speech_units.append(token_id.item())
+        # 构建content
+        if audio_path and os.path.exists(audio_path):
+            # 读取音频文件并转换为base64
+            with open(audio_path, 'rb') as f:
+                audio_binary = f.read()
+            audio_base64 = base64.b64encode(audio_binary).decode('utf-8')
+            content = {"audio": audio_base64}
+            if text_prompt:
+                content = [{"audio": audio_base64}, {"text": text_prompt}]
+        else:
+            content = text_prompt if text_prompt else "你好"
         
-        return torch.tensor(speech_units).unsqueeze(0) if speech_units else None
+        messages.append({"role": "user", "content": content})
+        return self.get_input_params(messages)
     
-    def inference(self, audio_path=None, text_prompt="", output_dir="./output"):
-        """执行推理"""
+
+    @torch.inference_mode()
+    def inference(self, audio_path=None, text_prompt="", output_dir="./output", temperature=1.0, top_p=1.0, max_new_tokens=256):
+        """执行推理，基于model_worker.py的生成逻辑"""
         if not text_prompt and not audio_path:
             raise ValueError("请提供文本提示或音频文件")
         
@@ -151,32 +181,86 @@ class OpenS2SInference:
         
         # 准备输入
         input_ids, speech_values, speech_mask = self._prepare_input(audio_path, text_prompt)
-        input_ids = input_ids.to(self.device)
+        input_ids = input_ids.to(device=self.device, non_blocking=True)
         
         if speech_values is not None:
-            speech_values = speech_values.to(dtype=torch.bfloat16, device=self.device)
-            speech_mask = speech_mask.to(self.device)
+            speech_values = speech_values.to(dtype=torch.bfloat16, device=self.device, non_blocking=True)
+            speech_mask = speech_mask.to(device=self.device, non_blocking=True)
         
         print("正在生成响应...")
         
-        # 执行生成
-        with torch.no_grad():
-            outputs = self.model.generate(
-                input_ids=input_ids,
-                attention_mask=None,
-                speech_values=speech_values,
-                speech_mask=speech_mask,
-                spk_emb=None,
-                units_gen=True,
-                generation_config=self.generation_config
-            )
+        # 设置生成参数（与model_worker.py保持一致）
+        generation_config = deepcopy(self.generation_config)
+        tts_generation_config = deepcopy(self.tts_generation_config)
+        
+        do_sample = True if temperature > 0.001 else False
+        max_new_tokens = min(int(max_new_tokens), 1024)
+        
+        generation_config.update(
+            **{
+                "temperature": temperature,
+                "top_p": top_p,
+                "max_new_tokens": max_new_tokens,
+                "do_sample": do_sample,
+            }
+        )
+        
+        tts_generation_config.update(
+            **{
+                "do_sample": True,
+                "temperature": 1.0,
+                "top_p": 1.0
+            }
+        )
+        
+        # 执行生成（非流式版本）
+        outputs = self.model.generate(
+            input_ids=input_ids,
+            attention_mask=None,
+            speech_values=speech_values,
+            speech_mask=speech_mask,
+            spk_emb=None,
+            units_gen=True,
+            generation_config=generation_config,
+            tts_generation_config=tts_generation_config,
+            use_cache=True,
+        )
+        
+        # 处理输出（基于model_worker.py的逻辑）
+        input_length = len(input_ids[0])
+        
+        # 处理模型输出（基于实际返回的字典格式）
+        if isinstance(outputs, dict):
+            text_outputs = outputs.get('sequences')
+            units_outputs = outputs.get('units')
+        elif isinstance(outputs, tuple) and len(outputs) == 2:
+            text_outputs, units_outputs = outputs
+        elif hasattr(outputs, 'sequences'):
+            # GenerateOutput 对象
+            text_outputs = outputs.sequences
+            units_outputs = getattr(outputs, 'units_sequences', None)
+        else:
+            # 直接tensor输出
+            text_outputs = outputs
+            units_outputs = None
+        
+        # 确保 text_outputs 是tensor
+        if not torch.is_tensor(text_outputs):
+            raise ValueError(f"Unexpected text_outputs type: {type(text_outputs)}")
         
         # 解码文本响应
-        input_length = len(input_ids[0])
-        response_text = self.tokenizer.decode(
-            outputs[0][input_length:], 
-            skip_special_tokens=True
-        )
+        if len(text_outputs.shape) > 1:
+            # 批处理输出
+            response_text = self.tokenizer.decode(
+                text_outputs[0][input_length:], 
+                skip_special_tokens=True
+            )
+        else:
+            # 单个序列输出
+            response_text = self.tokenizer.decode(
+                text_outputs[input_length:], 
+                skip_special_tokens=True
+            )
         
         # 保存文本输出
         text_output_path = os.path.join(output_dir, "response.txt")
@@ -186,39 +270,64 @@ class OpenS2SInference:
         print(f"文本响应: {response_text}")
         print(f"文本已保存到: {text_output_path}")
         
-        # 尝试生成音频（简化版本）
+        # 生成音频（基于model_worker.py的音频生成逻辑）
+        audio_output_path = None
         try:
-            # 提取speech units
-            speech_units = self._extract_speech_units(outputs, input_length)
-            
-            if speech_units is not None and len(speech_units[0]) > 0:
-                # 使用AudioDecoder生成音频
-                session_id = str(uuid.uuid4())
-                audio_output = self.audio_decoder.token2wav(
-                    speech_units.to(self.device),
-                    session_id,
-                    finalize=True
-                )
+            if units_outputs is not None and torch.is_tensor(units_outputs):
+                # 提取units并减去bias
+                if len(units_outputs.shape) > 1:
+                    generated_units = units_outputs[0][input_length:]
+                else:
+                    generated_units = units_outputs[input_length:]
                 
-                # 保存音频输出
-                audio_output_path = os.path.join(output_dir, "response.wav")
-                torchaudio.save(audio_output_path, audio_output, 22050)
-                print(f"音频已保存到: {audio_output_path}")
+                units = []
+                for unit_id in generated_units:
+                    unit_value = unit_id.item() - self.units_bias
+                    if unit_value >= 0:  # 只保留有效的audio units
+                        units.append(unit_value)
+                
+                print(f"提取到 {len(units)} 个有效的音频units")
+                
+                if units:
+                    # 使用AudioDecoder生成音频
+                    session_id = uuid.uuid4()
+                    tts_token = torch.LongTensor(units).unsqueeze(0).to(device=self.device)
+                    
+                    # 生成音频（使用与model_worker相同的参数）
+                    prompt_speech_feat = torch.zeros(1, 0, 80).to(device=self.device)
+                    flow_prompt_speech_token = torch.zeros(1, 0, dtype=torch.int64).to(device=self.device)
+                    
+                    audio_output, _ = self.audio_decoder.token2wav(
+                        tts_token, 
+                        uuid=session_id,
+                        prompt_token=flow_prompt_speech_token,
+                        prompt_feat=prompt_speech_feat,
+                        finalize=True
+                    )
+                    
+                    # 保存音频输出
+                    audio_output_path = os.path.join(output_dir, "response.wav")
+                    torchaudio.save(audio_output_path, audio_output.cpu(), 22050)
+                    print(f"音频已保存到: {audio_output_path}")
+                else:
+                    print("未生成有效的音频units")
             else:
-                print("未生成音频输出")
+                print("模型未返回音频units")
                 
         except Exception as e:
             print(f"音频生成出错: {e}")
+            import traceback
+            traceback.print_exc()
             print("只有文本输出可用")
         
         return {
             "text": response_text,
             "text_file": text_output_path,
-            "audio_file": os.path.join(output_dir, "response.wav") if 'audio_output_path' in locals() else None
+            "audio_file": audio_output_path
         }
 
 def main():
-    parser = argparse.ArgumentParser(description="OpenS2S推理脚本")
+    parser = argparse.ArgumentParser(description="OpenS2S推理脚本（基于model_worker.py）")
     parser.add_argument("--model-path", type=str, required=True, 
                        help="OpenS2S模型路径")
     parser.add_argument("--flow-path", type=str, required=True, 
@@ -231,6 +340,14 @@ def main():
                        help="输出目录")
     parser.add_argument("--device", type=str, default="cuda", 
                        choices=["cuda", "cpu"], help="使用的设备")
+    
+    # 生成参数（与model_worker.py保持一致）
+    parser.add_argument("--temperature", type=float, default=0.8,
+                       help="生成温度参数")
+    parser.add_argument("--top-p", type=float, default=0.8,
+                       help="nucleus sampling参数")
+    parser.add_argument("--max-new-tokens", type=int, default=512,
+                       help="最大生成token数量")
     
     args = parser.parse_args()
     
@@ -253,17 +370,29 @@ def main():
     
     try:
         # 初始化推理器
+        print(f"使用设备: {args.device}")
+        print(f"模型路径: {args.model_path}")
+        print(f"Flow路径: {args.flow_path}")
+        
         inferencer = OpenS2SInference(args.model_path, args.flow_path, args.device)
         
         # 执行推理
         results = inferencer.inference(
             audio_path=args.audio_path if args.audio_path else None,
             text_prompt=args.text,
-            output_dir=args.output_dir
+            output_dir=args.output_dir,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            max_new_tokens=args.max_new_tokens
         )
         
-        print("\n推理完成！")
+        print("\n=== 推理完成 ===")
         print(f"输出目录: {args.output_dir}")
+        print(f"文本响应: {results['text']}")
+        if results['audio_file']:
+            print(f"音频文件: {results['audio_file']}")
+        else:
+            print("未生成音频文件")
         
     except Exception as e:
         print(f"推理过程中发生错误: {e}")
