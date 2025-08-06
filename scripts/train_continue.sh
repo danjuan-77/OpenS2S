@@ -1,4 +1,8 @@
-python -m torch.distributed.run --nproc_per_node=8 train.py \
+omnispeech_path=/share/nlp/tuwenming/models/CASIA-LM/OpenS2S
+data_dir=/share/nlp/tuwenming/projects/OpenS2S/opens2s_ultravoice_training_data
+SAVE_ROOT=./ckpts
+
+python -m torch.distributed.run --nproc_per_node=4 train.py \
     --deepspeed ds_config/dp_config_zero1.json \
     \
     --dataset_dirs "${data_dir}" \
@@ -12,11 +16,11 @@ python -m torch.distributed.run --nproc_per_node=8 train.py \
     --learning_rate 2e-5 \
     --weight_decay 0.05 \
     --max_grad_norm 1.0 \
-    --warmup_steps 1000 \
+    --warmup_steps 500 \
     \
     --per_device_train_batch_size 4 \
     --gradient_accumulation_steps 16 \
-    --num_train_epochs 1 \
+    --num_train_epochs 3 \
     \
     --omnispeech_model $omnispeech_path \
     --unfreeze_adapter True \
@@ -27,5 +31,5 @@ python -m torch.distributed.run --nproc_per_node=8 train.py \
     --report_to "none" \
     \
     --logging_steps 20 \
-    --save_steps 200 \
-    --save_total_limit 1
+    --save_steps 100 \
+    --save_total_limit 20
