@@ -6,7 +6,7 @@ GRAD_ACCUM=8
 LEARNING_RATE=2e-5
 EPOCHS=3
 WARMUP_STEPS=500
-SAVE_ROOT=/mnt/buffer/tuwenming/checkpoints/OpenS2S_SFT_${TIMESTAMP}_bs${BATCH_SIZE}_acc${GRAD_ACCUM}_lr${LEARNING_RATE}_ep${EPOCHS}
+SAVE_ROOT=/mnt/buffer/tuwenming/checkpoints/OpenS2S/OpenS2S_SFT_${TIMESTAMP}_bs${BATCH_SIZE}_acc${GRAD_ACCUM}_lr${LEARNING_RATE}_ep${EPOCHS}
 
 python -m torch.distributed.run --nproc_per_node=4 train.py \
     --deepspeed ds_config/dp_config_zero1.json \
