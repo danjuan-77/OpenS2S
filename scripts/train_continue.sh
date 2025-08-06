@@ -9,7 +9,7 @@ python -m torch.distributed.run --nproc_per_node=4 train.py \
     \
     --output_dir ${SAVE_ROOT} \
     --remove_unused_columns False \
-    --seed 1 \
+    --seed 42 \
     --do_train True \
     --bf16 True \
     \
@@ -19,7 +19,7 @@ python -m torch.distributed.run --nproc_per_node=4 train.py \
     --warmup_steps 500 \
     \
     --per_device_train_batch_size 4 \
-    --gradient_accumulation_steps 16 \
+    --gradient_accumulation_steps 8 \
     --num_train_epochs 3 \
     \
     --omnispeech_model $omnispeech_path \
