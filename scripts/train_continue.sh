@@ -18,7 +18,7 @@ python -m torch.distributed.run --nproc_per_node=4 train.py \
     --max_grad_norm 1.0 \
     --warmup_steps 500 \
     \
-    --per_device_train_batch_size 4 \
+    --per_device_train_batch_size 1 \
     --gradient_accumulation_steps 8 \
     --num_train_epochs 3 \
     \
@@ -30,6 +30,6 @@ python -m torch.distributed.run --nproc_per_node=4 train.py \
     --disable_tqdm True \
     --report_to "none" \
     \
-    --logging_steps 20 \
-    --save_steps 100 \
+    --logging_steps 10 \
+    --save_steps 500 \
     --save_total_limit 20
