@@ -4,7 +4,7 @@ TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
 BATCH_SIZE=1
 GRAD_ACCUM=4
 LEARNING_RATE=2e-5
-EPOCHS=3
+EPOCHS=1
 WARMUP_STEPS=500
 SAVE_ROOT=/mnt/buffer/tuwenming/checkpoints/OpenS2S/OpenS2S_SFT_${TIMESTAMP}_bs${BATCH_SIZE}_acc${GRAD_ACCUM}_lr${LEARNING_RATE}_ep${EPOCHS}
 
@@ -37,7 +37,7 @@ python -m torch.distributed.run --nproc_per_node=4 train.py \
     --report_to "none" \
     \
     --logging_steps 1 \
-    --save_steps 1000 \
-    --save_total_limit 20
+    --save_steps 5000 \
+    --save_total_limit 1
 
 # nohup bash scripts/train_continue.sh > ./logs/train_continue_$(date +%Y%m%d%H%M%S).log 2>&1 &
